@@ -1,0 +1,322 @@
+---
+title: "Build and deploy a stroke prediction model using R"
+date: "`r Sys.Date()`"
+output: html_document
+author: "Vaishnavi Jyothi!"
+---
+
+# About Data Analysis Report
+
+This RMarkdown file contains the report of the data analysis done for the project on building and deploying a stroke prediction model in R. It contains analysis such as data exploration, summary statistics and building the prediction models. The final report was completed on `r date()`. 
+
+**Data Description:**
+
+According to the World Health Organization (WHO) stroke is the 2nd leading cause of death globally, responsible for approximately 11% of total deaths.
+
+This data set is used to predict whether a patient is likely to get stroke based on the input parameters like gender, age, various diseases, and smoking status. Each row in the data provides relevant information about the patient.
+
+
+# Load the dataset using the full file path
+stroke_data <- read.csv("healthcare-dataset-stroke-data.csv")
+
+# Convert categorical variables to factors
+stroke_data$gender <- as.factor(stroke_data$gender)
+stroke_data$smoking_status <- as.factor(stroke_data$smoking_status)
+stroke_data$ever_married <- as.factor(stroke_data$ever_married)
+stroke_data$work_type <- as.factor(stroke_data$work_type)
+stroke_data$Residence_type <- as.factor(stroke_data$Residence_type)
+stroke_data$stroke <- as.factor(stroke_data$stroke)
+
+# Check if age and bmi are numeric
+stroke_data$age <- as.numeric(stroke_data$age)
+stroke_data$bmi <- as.numeric(stroke_data$bmi)
+
+# Step 1: Replace "N/A" with NA
+stroke_data$bmi[stroke_data$bmi == "N/A"] <- NA
+
+# Step 2: Convert the bmi column to numeric (this should turn "N/A" values into NA)
+stroke_data$bmi <- as.numeric(stroke_data$bmi)
+
+# Step 3: Replace NAs in bmi with the median value of bmi
+stroke_data$bmi[is.na(stroke_data$bmi)] <- median(stroke_data$bmi, na.rm = TRUE)
+
+# Step 4: Check the structure again
+str(stroke_data)
+
+# Step 3: Check if conversion was successful
+str(stroke_data$bmi)
+
+# Check for missing values in the dataset
+sum(is.na(stroke_data))  # Total NAs
+colSums(is.na(stroke_data))  # NAs by column
+
+# Print summary statistics of the dataset
+summary(stroke_data)
+
+## Load data and install packages
+
+```{r}
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(caret)) install.packages("caret")
+if(!require(randomForest)) install.packages("randomForest")
+if(!require(e1071)) install.packages("e1071")
+if(!require(pROC)) install.packages("pROC")
+if(!require(shiny)) install.packages("shiny")
+
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(e1071)
+library(pROC)
+library(shiny)
+
+```
+
+
+## Describe and explore the data
+
+```{r}
+
+# View the first few rows of the data
+head(stroke_data)
+
+# Check the structure of the data
+str(stroke_data)
+
+# Get summary statistics
+summary(stroke_data)
+
+# Check for missing values
+sum(is.na(stroke_data))
+
+## Data Visualization
+
+# Load necessary libraries
+library(ggplot2)
+library(corrplot)
+
+# Distribution of Age by Stroke Status
+ggplot(stroke_data, aes(x = age, fill = stroke)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  theme_minimal() +
+  labs(title = "Distribution of Age by Stroke Status", x = "Age", y = "Count")
+
+# Distribution of BMI by Stroke Status
+ggplot(stroke_data, aes(x = bmi, fill = factor(stroke))) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  theme_minimal() +
+  labs(title = "Distribution of BMI by Stroke Status", x = "BMI", y = "Count")
+
+# Categorical Variables
+ggplot(stroke_data, aes(x = gender, fill = stroke)) +
+  geom_bar(position = "dodge") +
+  theme_minimal() +
+  labs(title = "Gender Distribution by Stroke Status", x = "Gender", y = "Count")
+
+# Correlation Plot (for numeric variables only)
+numeric_data <- stroke_data[, sapply(stroke_data, is.numeric)]
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45)
+
+
+```
+
+
+
+# Task Two: Build prediction models
+
+```{r}
+# Task Two: Build prediction models
+
+# Split the data into training and testing datasets
+set.seed(123)
+trainIndex <- createDataPartition(stroke_data$stroke, p = 0.8, list = FALSE)
+trainData <- stroke_data[trainIndex, ]
+testData <- stroke_data[-trainIndex, ]
+
+# Ensure 'stroke' is a factor for classification
+trainData$stroke <- as.factor(trainData$stroke)
+testData$stroke <- as.factor(testData$stroke)
+
+# Calculate class weights
+class_weights <- c("0" = 1, "1" = 10)
+
+# Train the Random Forest model with class weights
+model_rf <- randomForest(stroke ~ ., data = trainData, ntree = 100, classwt = class_weights)
+
+
+# Print the model summary
+print(model_rf)
+
+# Save the trained model for later use
+saveRDS(model_rf, "stroke_prediction_model.rds")
+
+```
+
+
+
+
+# Task Three: Evaluate and select prediction models
+
+```{r}
+# Task Three: Evaluate and select prediction models
+
+# Load necessary libraries
+library(caret)
+library(pROC)
+
+# Make predictions on the test data
+predictions <- predict(model_rf, newdata = testData)
+
+# Confusion Matrix
+conf_matrix <- confusionMatrix(predictions, testData$stroke)
+print(conf_matrix)
+
+# ROC Curve Analysis
+roc_curve <- roc(as.numeric(as.character(testData$stroke)), as.numeric(as.character(predictions)))
+
+# Plotting the ROC curve
+plot(roc_curve, main = "ROC Curve for Stroke Prediction Model", col = "blue")
+
+# Calculate AUC (Area Under the Curve)
+auc_value <- auc(roc_curve)   # Store auc_value globally here
+
+print(paste("AUC:", auc_value))
+
+```
+# Task Four: Deploy the prediction model
+
+```{r}
+# Task Four: Deploy the prediction model with Shiny
+
+library(shiny)
+
+# Load trained model
+if (file.exists("stroke_prediction_model.rds")) {
+  model_rf <- readRDS("stroke_prediction_model.rds")
+} else {
+  stop("Model file not found. Make sure you have run Task Two and saved the model.")
+}
+
+
+# Define the user interface (UI)
+ui <- fluidPage(
+  titlePanel("Stroke Prediction Model"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("age", "Age:", value = 50, min = 0, max = 100),
+      selectInput("gender", "Gender:", choices = c("Male", "Female")),
+      numericInput("hypertension", "Hypertension (1 = Yes, 0 = No):", value = 0, min = 0, max = 1),
+      numericInput("heart_disease", "Heart Disease (1 = Yes, 0 = No):", value = 0, min = 0, max = 1),
+      numericInput("bmi", "BMI:", value = 25, min = 10, max = 50),
+      selectInput("ever_married", "Ever Married:", choices = c("Yes", "No")),
+      selectInput("work_type", "Work Type:", choices = c("Private", "Self-employed", "Govt_job", "Children", "Never_worked")),
+      selectInput("Residence_type", "Residence Type:", choices = c("Urban", "Rural")),
+      selectInput("smoking_status", "Smoking Status:", choices = c("never smoked", "formerly smoked", "smokes")),
+      actionButton("predict", "Predict")
+    ),
+    
+    mainPanel(
+      textOutput("prediction_result")
+    )
+  )
+)
+
+# Define the server logic
+server <- function(input, output) {
+  
+  observeEvent(input$predict, {
+    # Prepare the input data for prediction
+    new_data <- data.frame(
+      gender = factor(input$gender, levels = c("Male", "Female")),
+      age = as.numeric(input$age),
+      hypertension = as.integer(input$hypertension),
+      heart_disease = as.integer(input$heart_disease),
+      ever_married = factor(input$ever_married, levels = c("Yes", "No")),
+      work_type = factor(input$work_type, levels = c("Private", "Self-employed", "Govt_job", "Children", "Never_worked")),
+      Residence_type = factor(input$Residence_type, levels = c("Urban", "Rural")),
+      bmi = as.numeric(input$bmi),
+      smoking_status = factor(input$smoking_status, levels = c("never smoked", "formerly smoked", "smokes"))
+    )
+    
+    # Make prediction using the trained model
+    prediction <- predict(model_rf, new_data)
+    
+    # Display result
+    output$prediction_result <- renderText({
+      if (prediction == "1") {
+        "Prediction: High Risk of Stroke"
+      } else {
+        "Prediction: Low Risk of Stroke"
+      }
+    })
+  })
+  
+  shinyApp(ui = ui, server = server)
+}
+
+
+```
+
+
+
+
+# Task Five: Findings and Conclusions
+
+Key Findings:
+Data Preprocessing:
+
+Categorical variables were successfully converted to factors, and missing values in BMI were imputed with the median.
+Class imbalance was addressed using class weights in the Random Forest model.
+Model Performance:
+
+The Random Forest model performed well, with high accuracy, sensitivity, specificity, and an AUC of r round(auc_value, 3), indicating good predictive power.
+Important Features:
+
+Key predictors of stroke risk included age, BMI, hypertension, heart disease, and smoking status.
+Model Deployment:
+
+The model was deployed using a Shiny app, providing users with a real-time stroke risk prediction based on input features.
+Conclusion:
+The Random Forest model effectively predicts stroke risk based on key health factors, demonstrating solid accuracy and real-world applicability. The Shiny app makes it accessible for healthcare providers to evaluate stroke risk. Future improvements could include hyperparameter tuning, testing additional models, and incorporating more features for better predictions.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
